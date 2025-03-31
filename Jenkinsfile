@@ -320,7 +320,16 @@ pipeline {
         stage('Zip Build') {
                     steps {
                         script {
-                            bat """
+                            // Đảm bảo thư mục tồn tại
+                    bat """
+                    IF NOT EXIST "%BUILD_OUTPUT%" (
+                        echo Build output directory does not exist
+                        exit /b 1
+                    )
+                    """
+        
+                    // Nén file build bằng 7-Zip (đảm bảo 7-Zip đã được cài đặt)
+                    bat """
                     @echo off
                     setlocal enabledelayedexpansion
         
@@ -347,8 +356,8 @@ pipeline {
                         exit /b 1
                     )
         
-                    REM Nén file sử dụng Windows internal compress
-                    powershell Compress-Archive -Path "%BUILD_OUTPUT%\\!BUILD_FILE!" -DestinationPath "%WORKSPACE%\\!ZIP_FILENAME!"
+                    REM Nén file sử dụng 7-Zip
+                    "C:\\Program Files\\7-Zip\\7z.exe" a -tzip "%WORKSPACE%\\!ZIP_FILENAME!" "%BUILD_OUTPUT%\\!BUILD_FILE!"
         
                     REM Kiểm tra file ZIP đã được tạo
                     if not exist "%WORKSPACE%\\!ZIP_FILENAME!" (
