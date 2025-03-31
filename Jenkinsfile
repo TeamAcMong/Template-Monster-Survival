@@ -320,69 +320,87 @@ pipeline {
         stage('Zip Build') {
             steps {
                 script {
-                    // Xác định tên file và đường dẫn
-                    def buildFileName
-                    def buildPath = "${env.BUILD_OUTPUT}"
-                    
-                    // Xác định tên file build dựa trên nền tảng
-                    switch(env.TARGET_PLATFORM.toLowerCase()) {
-                        case 'windows':
-                            buildFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}.exe"
-                            break
-                        case 'android':
-                            buildFileName = env.ANDROID_BUILD_FORMAT.toLowerCase() == 'aab' ? 
-                                "${env.GAME_NAME}_${env.TARGET_PLATFORM}.aab" : 
-                                "${env.GAME_NAME}_${env.TARGET_PLATFORM}.apk"
-                            break
-                        case 'ios':
-                        case 'webgl':
-                            buildFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}"
-                            break
-                        default:
-                            buildFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}"
-                    }
-                    
-                    // Tạo tên ZIP
-                    def branchName = env.GIT_BRANCH.replaceAll('/', '-')
-                    def zipFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}_${env.BUILD_TYPE}_${branchName}_${env.BUILD_NUMBER}.zip"
-                    
-                    // Sử dụng .NET Framework để nén
-                    powershell """
-                    Add-Type -AssemblyName System.IO.Compression.FileSystem
-                    
-                    # Đường dẫn đầy đủ của file/thư mục build
-                    \$buildPath = Join-Path "${buildPath}" "${buildFileName}"
-                    
-                    # Đường dẫn file ZIP
-                    \$zipPath = Join-Path "${env.WORKSPACE}" "${zipFileName}"
-                    
-                    # Kiểm tra file/thư mục build tồn tại
-                    if (!(Test-Path \$buildPath)) {
-                        Write-Error "Build path not found: \$buildPath"
-                        exit 1
-                    }
-                    
-                    # Nén file hoặc thư mục
-                    if (Test-Path -PathType Leaf \$buildPath) {
-                        # Nén file
-                        [System.IO.Compression.ZipFile]::CreateFromDirectory(\$buildPath, \$zipPath, [System.IO.Compression.CompressionLevel]::Optimal, \$false)
-                    } else {
-                        # Nén thư mục
-                        [System.IO.Compression.ZipFile]::CreateFromDirectory(\$buildPath, \$zipPath)
-                    }
-                    
-                    # Kiểm tra file ZIP đã được tạo
-                    if (Test-Path \$zipPath) {
-                        Write-Output "Created ZIP file: \$zipPath"
-                        
-                        # Hiển thị thông tin file
-                        \$zipInfo = Get-Item \$zipPath
-                        Write-Output "ZIP file size: \$(\$zipInfo.Length / 1MB) MB"
-                    } else {
-                        Write-Error "Failed to create ZIP file"
-                        exit 1
-                    }
+                    // Debug: In ra các biến môi trường
+                    bat """
+                    echo BUILD_OUTPUT: %BUILD_OUTPUT%
+                    echo WORKSPACE: %WORKSPACE%
+                    echo GAME_NAME: %GAME_NAME%
+                    echo TARGET_PLATFORM: %TARGET_PLATFORM%
+                    echo BUILD_TYPE: %BUILD_TYPE%
+                    echo GIT_BRANCH: %GIT_BRANCH%
                     """
+
+                    powershell '''
+                    # Các biến môi trường
+                    $buildOutput = $env:BUILD_OUTPUT
+                    $workspace = $env:WORKSPACE
+                    $gameName = $env:GAME_NAME
+                    $targetPlatform = $env:TARGET_PLATFORM
+                    $buildType = $env:BUILD_TYPE
+                    $gitBranch = $env:GIT_BRANCH
+                    $buildNumber = $env:BUILD_NUMBER
+
+                    # Xác định tên file build
+                    $buildFileName = switch ($targetPlatform.ToLower()) {
+                        "android" { 
+                            $buildFormat = $env:ANDROID_BUILD_FORMAT
+                            if ($buildFormat -eq "aab") { 
+                                "$gameName" + "_" + "$targetPlatform.aab" 
+                            } else { 
+                                "$gameName" + "_" + "$targetPlatform.apk" 
+                            }
+                        }
+                        "windows" { "$gameName" + "_" + "$targetPlatform.exe" }
+                        default { "$gameName" + "_" + "$targetPlatform" }
+                    }
+
+                    # Đường dẫn đầy đủ của file build
+                    $fullBuildPath = Join-Path $buildOutput $buildFileName
+
+                    # Kiểm tra file build tồn tại
+                    if (!(Test-Path $fullBuildPath)) {
+                        Write-Error "Build file not found: $fullBuildPath"
+                        exit 1
+                    }
+
+                    # Tạo tên file ZIP
+                    $safeBranchName = $gitBranch -replace '[\/\\]', '-'
+                    $zipFileName = "{0}_{1}_{2}_{3}_{4}.zip" -f $gameName, $targetPlatform, $buildType, $safeBranchName, $buildNumber
+
+                    # Đường dẫn đầy đủ của file ZIP
+                    $fullZipPath = Join-Path $workspace $zipFileName
+
+                    # Nén file
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem
+                    try {
+                        # Tạo thư mục tạm để nén
+                        $tempDir = Join-Path $env:TEMP "BuildTemp_$((Get-Date).Ticks)"
+                        New-Item -ItemType Directory -Path $tempDir | Out-Null
+
+                        # Copy file vào thư mục tạm
+                        Copy-Item $fullBuildPath $tempDir
+
+                        # Nén từ thư mục tạm
+                        [System.IO.Compression.ZipFile]::CreateFromDirectory($tempDir, $fullZipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+
+                        # Xóa thư mục tạm
+                        Remove-Item $tempDir -Recurse -Force
+
+                        # Kiểm tra file ZIP
+                        if (Test-Path $fullZipPath) {
+                            $zipFile = Get-Item $fullZipPath
+                            Write-Output "Created ZIP file: $zipFileName"
+                            Write-Output ("ZIP file size: {0:N2} MB" -f ($zipFile.Length / 1MB))
+                        } else {
+                            Write-Error "Failed to create ZIP file"
+                            exit 1
+                        }
+                    }
+                    catch {
+                        Write-Error "Compression error: $_"
+                        exit 1
+                    }
+                    '''
                 }
             }
         }
