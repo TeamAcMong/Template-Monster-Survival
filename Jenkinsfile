@@ -399,11 +399,11 @@ pipeline {
         using System.IO;
         using System.Threading.Tasks;
         
-        class DiscordUploader 
+        public class DiscordUploader 
         {
-            private readonly DiscordSocketClient _client;
-            private readonly string _botToken;
-            private readonly ulong _channelId;
+            private DiscordSocketClient _client;
+            private string _botToken;
+            private ulong _channelId;
         
             public DiscordUploader(string botToken, ulong channelId)
             {
@@ -432,7 +432,7 @@ pipeline {
         
                     await Task.Delay(5000);  // Đợi kết nối
         
-                    var channel = _client.GetChannel(_channelId) as ITextChannel;
+                    var channel = await _client.GetChannelAsync(_channelId) as ITextChannel;
                     if (channel != null)
                     {
                         using (var fileStream = File.OpenRead(filePath))
@@ -454,19 +454,24 @@ pipeline {
                     throw;
                 }
             }
+        
+            public static async Task RunUpload(string botToken, ulong channelId, string filePath, string message)
+            {
+                var uploader = new DiscordUploader(botToken, channelId);
+                await uploader.UploadFileAsync(filePath, message);
+            }
         }
         
-        class Program 
+        public class Program 
         {
-            static async Task Main(string[] args)
+            public static async Task Main(string[] args)
             {
                 string botToken = Environment.GetEnvironmentVariable("DISCORD_BOT_TOKEN");
                 ulong channelId = ulong.Parse(Environment.GetEnvironmentVariable("DISCORD_CHANNEL_ID"));
                 string filePath = args[0];
                 string message = args[1];
         
-                var uploader = new DiscordUploader(botToken, channelId);
-                await uploader.UploadFileAsync(filePath, message);
+                await DiscordUploader.RunUpload(botToken, channelId, filePath, message);
             }
         }
         '''
