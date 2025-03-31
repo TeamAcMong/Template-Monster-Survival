@@ -357,7 +357,7 @@ pipeline {
                         exit /b 1
                     )
         
-                    powershell -Command "Compress-Archive -Path '${buildOutput}\\${buildFileName}' -DestinationPath '${workspace}\\${zipFileName}'"
+                    powershell -Command "Compress-Archive -Path '${buildOutput}' -DestinationPath '${workspace}\\${zipFileName}'"
         
                     if not exist "${workspace}\\${zipFileName}" (
                         echo Failed to create ZIP file
@@ -376,67 +376,78 @@ pipeline {
         }
         
         stage('Deploy to Discord') {
-            steps {
-                // Gửi file zip lên Discord thông qua webhook
-                powershell '''
-                $webhookUrl = "${DISCORD_WEBHOOK}"
-                $filePath = "${WORKSPACE}\\${ZIP_FILENAME}"
-                
-                if (!(Test-Path $filePath)) {
-                    Write-Error "ZIP file not found: $filePath"
-                    exit 1
-                }
-                
-                $fileInfo = Get-Item $filePath
-                if ($fileInfo.Length -gt 8MB) {
-                    Write-Warning "File size (${($fileInfo.Length / 1MB).ToString('0.00')} MB) exceeds Discord's 8MB limit for free accounts"
-                }
-                
-                try {
-                    $fileBytes = [System.IO.File]::ReadAllBytes($filePath)
-                    $fileContent = [System.Text.Encoding]::GetEncoding("iso-8859-1").GetString($fileBytes)
+                    steps {
+                        script {
+                            // Đảm bảo các biến môi trường được truyền chính xác
+                    def webhookUrl = env.DISCORD_WEBHOOK
+                    def gitBranch = env.GIT_BRANCH
+                    def safeBranchName = gitBranch.replaceAll('[/\\\\]', '-')
+                    def zipFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}_${env.BUILD_TYPE}_${safeBranchName}_${env.BUILD_NUMBER}.zip"
+                    def filePath = "${env.WORKSPACE}\\${zipFileName}"
                     
-                    $boundary = [System.Guid]::NewGuid().ToString()
-                    $LF = "`r`n"
                     
-                    $bodyLines = (
-                        "--$boundary",
-                        "Content-Disposition: form-data; name=`"content`"",
-                        "",
-                        "New build available for ${GAME_NAME} (Build ${BUILD_VERSION}, Platform: ${TARGET_PLATFORM}, Type: ${BUILD_TYPE}, Branch: ${SELECTED_GIT_BRANCH})",
-                        "--$boundary",
-                        "Content-Disposition: form-data; name=`"file`"; filename=`"${ZIP_FILENAME}`"",
-                        "Content-Type: application/zip",
-                        "",
-                        $fileContent,
-                        "--$boundary--"
-                    ) -join $LF
+                    // PowerShell script để upload
+                    powershell """
+                    \$webhookUrl = '${webhookUrl}'
+                    \$filePath = '${filePath}'
                     
-                    $response = Invoke-RestMethod -Uri $webhookUrl -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $bodyLines
-                    Write-Output "File successfully uploaded to Discord"
-                } catch {
-                    Write-Error "Failed to upload file to Discord: $_"
-                    
-                    # Gửi thông báo không có tệp đính kèm
-                    try {
-                        $params = @{
-                            Uri = $webhookUrl
-                            Method = 'POST'
-                            ContentType = 'application/json'
-                            Body = @{
-                                content = "⚠️ Build completed but file upload failed. File might be too large for Discord (>8MB). Build: ${GAME_NAME} (Build ${BUILD_VERSION}, Platform: ${TARGET_PLATFORM}, Type: ${BUILD_TYPE}, Branch: ${SELECTED_GIT_BRANCH})"
-                            } | ConvertTo-Json
-                        }
-                        
-                        Invoke-RestMethod @params
-                        Write-Output "Sent notification to Discord (without attachment)"
-                        exit 0  # Đừng làm thất bại build chỉ vì không upload được file
-                    } catch {
-                        Write-Error "Failed to send notification to Discord: $_"
+                    # Kiểm tra file tồn tại
+                    if (!(Test-Path -Path \$filePath)) {
+                        Write-Error "ZIP file not found: \$filePath"
                         exit 1
                     }
+                    
+                    # Chuẩn bị thông điệp
+                    \$message = "New build available for ${env.GAME_NAME} (Build ${env.BUILD_NUMBER}, Platform: ${env.TARGET_PLATFORM}, Type: ${env.BUILD_TYPE}, Branch: ${env.GIT_BRANCH})"
+                    
+                    try {
+                        # Chuẩn bị multipart request
+                        \$boundary = [System.Guid]::NewGuid().ToString()
+                        \$LF = "`r`n"
+                        
+                        # Đọc nội dung file
+                        \$fileBytes = [System.IO.File]::ReadAllBytes(\$filePath)
+                        
+                        # Tạo body request
+                        \$bodyLines = @(
+                            "--\$boundary",
+                            "Content-Disposition: form-data; name=`"content`"",
+                            "",
+                            "\$message",
+                            "--\$boundary",
+                            "Content-Disposition: form-data; name=`"file`"; filename=`"${zipFileName}`"",
+                            "Content-Type: application/octet-stream",
+                            "",
+                            [System.Text.Encoding]::GetEncoding("iso-8859-1").GetString(\$fileBytes),
+                            "--\$boundary--"
+                        ) -join \$LF
+                        
+                        # Gửi request
+                        \$response = Invoke-RestMethod -Uri \$webhookUrl -Method Post -ContentType "multipart/form-data; boundary=\$boundary" -Body \$bodyLines
+                        Write-Output "File successfully uploaded to Discord"
+                    }
+                    catch {
+                        Write-Error "Failed to upload file to Discord: \$_"
+                        
+                        # Gửi thông báo không có file đính kèm
+                        try {
+                            \$fallbackMessage = "⚠️ Build completed but file upload failed. Build: ${env.GAME_NAME} (Build ${env.BUILD_NUMBER}, Platform: ${env.TARGET_PLATFORM}, Type: ${env.BUILD_TYPE}, Branch: ${env.GIT_BRANCH})"
+                            
+                            \$fallbackBody = @{
+                                content = \$fallbackMessage
+                            } | ConvertTo-Json
+                            
+                            Invoke-RestMethod -Uri \$webhookUrl -Method Post -ContentType 'application/json' -Body \$fallbackBody
+                            Write-Output "Sent notification to Discord (without attachment)"
+                            exit 0
+                        }
+                        catch {
+                            Write-Error "Failed to send fallback notification to Discord: \$_"
+                            exit 1
+                        }
+                    }
+                    """
                 }
-                '''
             }
         }
     }
