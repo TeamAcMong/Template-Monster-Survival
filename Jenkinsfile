@@ -320,87 +320,50 @@ pipeline {
         stage('Zip Build') {
                     steps {
                         script {
-                            // Debug: In ra các biến môi trường
-                    bat """
-                    echo BUILD_OUTPUT: %BUILD_OUTPUT%
-                    echo WORKSPACE: %WORKSPACE%
-                    echo GAME_NAME: %GAME_NAME%
-                    echo TARGET_PLATFORM: %TARGET_PLATFORM%
-                    echo BUILD_TYPE: %BUILD_TYPE%
-                    echo GIT_BRANCH: %GIT_BRANCH%
+                            bat """
+                    @echo off
+                    setlocal enabledelayedexpansion
+        
+                    REM Xác định tên file build
+                    if "%TARGET_PLATFORM%"=="Android" (
+                        if "%ANDROID_BUILD_FORMAT%"=="aab" (
+                            set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%.aab"
+                        ) else (
+                            set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%.apk"
+                        )
+                    ) else if "%TARGET_PLATFORM%"=="Windows" (
+                        set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%.exe"
+                    ) else (
+                        set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%"
+                    )
+        
+                    REM Tạo tên file ZIP
+                    set "BRANCH_NAME=%GIT_BRANCH:/=-%"
+                    set "ZIP_FILENAME=%GAME_NAME%_%TARGET_PLATFORM%_%BUILD_TYPE%_!BRANCH_NAME!_%BUILD_NUMBER%.zip"
+        
+                    REM Kiểm tra file build tồn tại
+                    if not exist "%BUILD_OUTPUT%\\!BUILD_FILE!" (
+                        echo Build file not found: %BUILD_OUTPUT%\!BUILD_FILE!
+                        exit /b 1
+                    )
+        
+                    REM Nén file sử dụng Windows internal compress
+                    powershell Compress-Archive -Path "%BUILD_OUTPUT%\\!BUILD_FILE!" -DestinationPath "%WORKSPACE%\\!ZIP_FILENAME!"
+        
+                    REM Kiểm tra file ZIP đã được tạo
+                    if not exist "%WORKSPACE%\\!ZIP_FILENAME!" (
+                        echo Failed to create ZIP file
+                        exit /b 1
+                    )
+        
+                    REM Hiển thị thông tin file ZIP
+                    for %%A in ("%WORKSPACE%\\!ZIP_FILENAME!") do (
+                        set "SIZE=%%~zA"
+                        set "SIZE_MB=!SIZE:~0,-6!"
+                        echo Created ZIP file: !ZIP_FILENAME!
+                        echo ZIP file size: !SIZE_MB! MB
+                    )
                     """
-        
-                    powershell '''
-                    # Các biến môi trường
-                    $buildOutput = $env:BUILD_OUTPUT
-                    $workspace = $env:WORKSPACE
-                    $gameName = $env:GAME_NAME
-                    $targetPlatform = $env:TARGET_PLATFORM
-                    $buildType = $env:BUILD_TYPE
-                    $gitBranch = $env:GIT_BRANCH
-                    $buildNumber = $env:BUILD_NUMBER
-        
-                    # Xác định tên file build
-                    $buildFileName = switch ($targetPlatform.ToLower()) {
-                        "android" { 
-                            $buildFormat = $env:ANDROID_BUILD_FORMAT
-                            if ($buildFormat -eq "aab") { 
-                                "$gameName" + "_" + "$targetPlatform.aab" 
-                            } else { 
-                                "$gameName" + "_" + "$targetPlatform.apk" 
-                            }
-                        }
-                        "windows" { "$gameName" + "_" + "$targetPlatform.exe" }
-                        default { "$gameName" + "_" + "$targetPlatform" }
-                    }
-        
-                    # Đường dẫn đầy đủ của file build
-                    $fullBuildPath = Join-Path $buildOutput $buildFileName
-        
-                    # Kiểm tra file build tồn tại
-                    if (!(Test-Path $fullBuildPath)) {
-                        Write-Error "Build file not found: $fullBuildPath"
-                        exit 1
-                    }
-        
-                    # Tạo tên file ZIP
-                    $safeBranchName = $gitBranch -replace '[\/\\]', '-'
-                    $zipFileName = "{0}_{1}_{2}_{3}_{4}.zip" -f $gameName, $targetPlatform, $buildType, $safeBranchName, $buildNumber
-        
-                    # Đường dẫn đầy đủ của file ZIP
-                    $fullZipPath = Join-Path $workspace $zipFileName
-        
-                    # Nén file
-                    Add-Type -AssemblyName System.IO.Compression.FileSystem
-                    try {
-                        # Tạo thư mục tạm để nén
-                        $tempDir = Join-Path $env:TEMP "BuildTemp_$((Get-Date).Ticks)"
-                        New-Item -ItemType Directory -Path $tempDir | Out-Null
-        
-                        # Copy file vào thư mục tạm
-                        Copy-Item $fullBuildPath $tempDir
-        
-                        # Nén từ thư mục tạm
-                        [System.IO.Compression.ZipFile]::CreateFromDirectory($tempDir, $fullZipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
-        
-                        # Xóa thư mục tạm
-                        Remove-Item $tempDir -Recurse -Force
-        
-                        # Kiểm tra file ZIP
-                        if (Test-Path $fullZipPath) {
-                            $zipFile = Get-Item $fullZipPath
-                            Write-Output "Created ZIP file: $zipFileName"
-                            Write-Output ("ZIP file size: {0:N2} MB" -f ($zipFile.Length / 1MB))
-                        } else {
-                            Write-Error "Failed to create ZIP file"
-                            exit 1
-                        }
-                    }
-                    catch {
-                        Write-Error "Compression error: $_"
-                        exit 1
-                    }
-                    '''
                 }
             }
         }
