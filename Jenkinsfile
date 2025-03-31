@@ -385,68 +385,104 @@ pipeline {
                     def zipFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}_${env.BUILD_TYPE}_${safeBranchName}_${env.BUILD_NUMBER}.zip"
                     def filePath = "${env.WORKSPACE}\\${zipFileName}"
                     
-                    
-                    // PowerShell script để upload
-                    powershell """
-                    \$webhookUrl = '${webhookUrl}'
-                    \$filePath = '${filePath}'
+                    // PowerShell script để upload file lớn
+                    powershell '''
+                    # Đường dẫn file và webhook
+                    $filePath = "''' + filePath + '''"
+                    $webhookUrl = "''' + webhookUrl + '''"
+                    $fileName = "''' + zipFileName + '''"
                     
                     # Kiểm tra file tồn tại
-                    if (!(Test-Path -Path \$filePath)) {
-                        Write-Error "ZIP file not found: \$filePath"
+                    if (!(Test-Path -Path $filePath)) {
+                        Write-Error "ZIP file not found: $filePath"
                         exit 1
                     }
                     
                     # Chuẩn bị thông điệp
-                    \$message = "New build available for ${env.GAME_NAME} (Build ${env.BUILD_NUMBER}, Platform: ${env.TARGET_PLATFORM}, Type: ${env.BUILD_TYPE}, Branch: ${env.GIT_BRANCH})"
+                    $message = "New build available for ''' + env.GAME_NAME + ''' (Build ''' + env.BUILD_NUMBER + ''', Platform: ''' + env.TARGET_PLATFORM + ''', Type: ''' + env.BUILD_TYPE + ''', Branch: ''' + env.GIT_BRANCH + ''')"
                     
                     try {
-                        # Chuẩn bị multipart request
-                        \$boundary = [System.Guid]::NewGuid().ToString()
-                        \$LF = "`r`n"
+                        # Đọc file theo chunks
+                        $fileStream = [System.IO.File]::OpenRead($filePath)
+                        $fileLength = $fileStream.Length
                         
-                        # Đọc nội dung file
-                        \$fileBytes = [System.IO.File]::ReadAllBytes(\$filePath)
+                        # Tạo multipart request
+                        $boundary = [System.Guid]::NewGuid().ToString()
+                        $LF = "`r`n"
                         
-                        # Tạo body request
-                        \$bodyLines = @(
-                            "--\$boundary",
-                            "Content-Disposition: form-data; name=`"content`"",
-                            "",
-                            "\$message",
-                            "--\$boundary",
-                            "Content-Disposition: form-data; name=`"file`"; filename=`"${zipFileName}`"",
-                            "Content-Type: application/octet-stream",
-                            "",
-                            [System.Text.Encoding]::GetEncoding("iso-8859-1").GetString(\$fileBytes),
-                            "--\$boundary--"
-                        ) -join \$LF
+                        # Mở kết nối
+                        $webRequest = [System.Net.WebRequest]::Create($webhookUrl)
+                        $webRequest.Method = "POST"
+                        $webRequest.ContentType = "multipart/form-data; boundary=$boundary"
                         
-                        # Gửi request
-                        \$response = Invoke-RestMethod -Uri \$webhookUrl -Method Post -ContentType "multipart/form-data; boundary=\$boundary" -Body \$bodyLines
-                        Write-Output "File successfully uploaded to Discord"
+                        # Mở stream request
+                        $requestStream = $webRequest.GetRequestStream()
+                        
+                        # Viết phần content
+                        $contentHeader = "--$boundary$LF" + 
+                            "Content-Disposition: form-data; name=`"content`"$LF$LF" +
+                            "$message$LF" +
+                            "--$boundary$LF" +
+                            "Content-Disposition: form-data; name=`"file`"; filename=`"$fileName`"$LF" +
+                            "Content-Type: application/octet-stream$LF$LF"
+                        
+                        $contentHeaderBytes = [System.Text.Encoding]::UTF8.GetBytes($contentHeader)
+                        $requestStream.Write($contentHeaderBytes, 0, $contentHeaderBytes.Length)
+                        
+                        # Ghi file theo chunks
+                        $buffer = New-Object byte[] 4096
+                        $bytesRead = 0
+                        $totalBytesRead = 0
+                        
+                        while (($bytesRead = $fileStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                            $requestStream.Write($buffer, 0, $bytesRead)
+                            $totalBytesRead += $bytesRead
+                            
+                            # Log tiến trình
+                            $percentComplete = [math]::Round(($totalBytesRead / $fileLength) * 100, 2)
+                            Write-Progress -Activity "Uploading to Discord" -Status "$percentComplete% Complete" -PercentComplete $percentComplete
+                        }
+                        
+                        # Viết phần kết thúc
+                        $footerBytes = [System.Text.Encoding]::UTF8.GetBytes("$LF--$boundary--$LF")
+                        $requestStream.Write($footerBytes, 0, $footerBytes.Length)
+                        
+                        # Gửi request và xử lý response
+                        $response = $webRequest.GetResponse()
+                        $responseStream = $response.GetResponseStream()
+                        $reader = New-Object System.IO.StreamReader($responseStream)
+                        $result = $reader.ReadToEnd()
+                        
+                        Write-Output "File uploaded successfully"
+                        Write-Output "Response: $result"
                     }
                     catch {
-                        Write-Error "Failed to upload file to Discord: \$_"
+                        Write-Error "Upload failed: $_"
                         
-                        # Gửi thông báo không có file đính kèm
+                        # Gửi thông báo dự phòng
                         try {
-                            \$fallbackMessage = "⚠️ Build completed but file upload failed. Build: ${env.GAME_NAME} (Build ${env.BUILD_NUMBER}, Platform: ${env.TARGET_PLATFORM}, Type: ${env.BUILD_TYPE}, Branch: ${env.GIT_BRANCH})"
+                            $fallbackMessage = "⚠️ Build completed but file upload failed. Build: ''' + env.GAME_NAME + ''' (Build ''' + env.BUILD_NUMBER + ''', Platform: ''' + env.TARGET_PLATFORM + ''', Type: ''' + env.BUILD_TYPE + ''')"
                             
-                            \$fallbackBody = @{
-                                content = \$fallbackMessage
+                            $fallbackBody = @{
+                                content = $fallbackMessage
                             } | ConvertTo-Json
                             
-                            Invoke-RestMethod -Uri \$webhookUrl -Method Post -ContentType 'application/json' -Body \$fallbackBody
+                            Invoke-RestMethod -Uri $webhookUrl -Method Post -ContentType 'application/json' -Body $fallbackBody
                             Write-Output "Sent notification to Discord (without attachment)"
                             exit 0
                         }
                         catch {
-                            Write-Error "Failed to send fallback notification to Discord: \$_"
+                            Write-Error "Failed to send fallback notification to Discord: $_"
                             exit 1
                         }
                     }
-                    """
+                    finally {
+                        # Đóng các stream
+                        if ($fileStream) { $fileStream.Close() }
+                        if ($requestStream) { $requestStream.Close() }
+                        if ($response) { $response.Close() }
+                    }
+                    '''
                 }
             }
         }
