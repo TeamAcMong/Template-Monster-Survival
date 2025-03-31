@@ -320,56 +320,54 @@ pipeline {
         stage('Zip Build') {
                     steps {
                         script {
-                            // Đảm bảo thư mục tồn tại
-                    bat """
-                    IF NOT EXIST "%BUILD_OUTPUT%" (
-                        echo Build output directory does not exist
-                        exit /b 1
-                    )
-                    """
+                            // Kiểm tra các biến môi trường
+                    def buildOutput = env.BUILD_OUTPUT
+                    def workspace = env.WORKSPACE
+                    def gameName = env.GAME_NAME
+                    def targetPlatform = env.TARGET_PLATFORM
+                    def buildType = env.BUILD_TYPE
+                    def gitBranch = env.GIT_BRANCH
+                    def buildNumber = env.BUILD_NUMBER
         
-                    // Nén file build bằng 7-Zip (đảm bảo 7-Zip đã được cài đặt)
+                    // Xác định tên file build
+                    def buildFileName
+                    if (targetPlatform.toLowerCase() == 'android') {
+                                buildFileName = env.ANDROID_BUILD_FORMAT.toLowerCase() == 'aab' ? 
+                            "${gameName}_${targetPlatform}.aab" : 
+                            "${gameName}_${targetPlatform}.apk"
+                    } else if (targetPlatform.toLowerCase() == 'windows') {
+                                buildFileName = "${gameName}_${targetPlatform}.exe"
+                    } else {
+                                buildFileName = "${gameName}_${targetPlatform}"
+                    }
+        
+                    // Tạo tên file ZIP
+                    def safeBranchName = gitBranch.replaceAll('[/\\\\]', '-')
+                    def zipFileName = "${gameName}_${targetPlatform}_${buildType}_${safeBranchName}_${buildNumber}.zip"
+        
+                    // Thực hiện nén
                     bat """
                     @echo off
-                    setlocal enabledelayedexpansion
+                    echo Build Output: ${buildOutput}
+                    echo Build File: ${buildFileName}
+                    echo ZIP Filename: ${zipFileName}
         
-                    REM Xác định tên file build
-                    if "%TARGET_PLATFORM%"=="Android" (
-                        if "%ANDROID_BUILD_FORMAT%"=="aab" (
-                            set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%.aab"
-                        ) else (
-                            set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%.apk"
-                        )
-                    ) else if "%TARGET_PLATFORM%"=="Windows" (
-                        set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%.exe"
-                    ) else (
-                        set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%"
-                    )
-        
-                    REM Tạo tên file ZIP
-                    set "BRANCH_NAME=%GIT_BRANCH:/=-%"
-                    set "ZIP_FILENAME=%GAME_NAME%_%TARGET_PLATFORM%_%BUILD_TYPE%_!BRANCH_NAME!_%BUILD_NUMBER%.zip"
-        
-                    REM Kiểm tra file build tồn tại
-                    if not exist "%BUILD_OUTPUT%\\!BUILD_FILE!" (
-                        echo Build file not found: %BUILD_OUTPUT%\!BUILD_FILE!
+                    if not exist "${buildOutput}\\${buildFileName}" (
+                        echo Build file not found: ${buildOutput}\\${buildFileName}
                         exit /b 1
                     )
         
-                    REM Nén file sử dụng 7-Zip
-                    "C:\\Program Files\\7-Zip\\7z.exe" a -tzip "%WORKSPACE%\\!ZIP_FILENAME!" "%BUILD_OUTPUT%\\!BUILD_FILE!"
+                    powershell -Command "Compress-Archive -Path '${buildOutput}\\${buildFileName}' -DestinationPath '${workspace}\\${zipFileName}'"
         
-                    REM Kiểm tra file ZIP đã được tạo
-                    if not exist "%WORKSPACE%\\!ZIP_FILENAME!" (
+                    if not exist "${workspace}\\${zipFileName}" (
                         echo Failed to create ZIP file
                         exit /b 1
                     )
         
-                    REM Hiển thị thông tin file ZIP
-                    for %%A in ("%WORKSPACE%\\!ZIP_FILENAME!") do (
+                    for %%A in ("${workspace}\\${zipFileName}") do (
                         set "SIZE=%%~zA"
                         set "SIZE_MB=!SIZE:~0,-6!"
-                        echo Created ZIP file: !ZIP_FILENAME!
+                        echo Created ZIP file: ${zipFileName}
                         echo ZIP file size: !SIZE_MB! MB
                     )
                     """
