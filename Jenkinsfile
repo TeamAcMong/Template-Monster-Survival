@@ -318,9 +318,9 @@ pipeline {
         }
         
         stage('Zip Build') {
-            steps {
-                script {
-                    // Debug: In ra các biến môi trường
+                    steps {
+                        script {
+                            // Debug: In ra các biến môi trường
                     bat """
                     echo BUILD_OUTPUT: %BUILD_OUTPUT%
                     echo WORKSPACE: %WORKSPACE%
@@ -329,7 +329,7 @@ pipeline {
                     echo BUILD_TYPE: %BUILD_TYPE%
                     echo GIT_BRANCH: %GIT_BRANCH%
                     """
-
+        
                     powershell '''
                     # Các biến môi trường
                     $buildOutput = $env:BUILD_OUTPUT
@@ -339,7 +339,7 @@ pipeline {
                     $buildType = $env:BUILD_TYPE
                     $gitBranch = $env:GIT_BRANCH
                     $buildNumber = $env:BUILD_NUMBER
-
+        
                     # Xác định tên file build
                     $buildFileName = switch ($targetPlatform.ToLower()) {
                         "android" { 
@@ -353,39 +353,39 @@ pipeline {
                         "windows" { "$gameName" + "_" + "$targetPlatform.exe" }
                         default { "$gameName" + "_" + "$targetPlatform" }
                     }
-
+        
                     # Đường dẫn đầy đủ của file build
                     $fullBuildPath = Join-Path $buildOutput $buildFileName
-
+        
                     # Kiểm tra file build tồn tại
                     if (!(Test-Path $fullBuildPath)) {
                         Write-Error "Build file not found: $fullBuildPath"
                         exit 1
                     }
-
+        
                     # Tạo tên file ZIP
                     $safeBranchName = $gitBranch -replace '[\/\\]', '-'
                     $zipFileName = "{0}_{1}_{2}_{3}_{4}.zip" -f $gameName, $targetPlatform, $buildType, $safeBranchName, $buildNumber
-
+        
                     # Đường dẫn đầy đủ của file ZIP
                     $fullZipPath = Join-Path $workspace $zipFileName
-
+        
                     # Nén file
                     Add-Type -AssemblyName System.IO.Compression.FileSystem
                     try {
                         # Tạo thư mục tạm để nén
                         $tempDir = Join-Path $env:TEMP "BuildTemp_$((Get-Date).Ticks)"
                         New-Item -ItemType Directory -Path $tempDir | Out-Null
-
+        
                         # Copy file vào thư mục tạm
                         Copy-Item $fullBuildPath $tempDir
-
+        
                         # Nén từ thư mục tạm
                         [System.IO.Compression.ZipFile]::CreateFromDirectory($tempDir, $fullZipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
-
+        
                         # Xóa thư mục tạm
                         Remove-Item $tempDir -Recurse -Force
-
+        
                         # Kiểm tra file ZIP
                         if (Test-Path $fullZipPath) {
                             $zipFile = Get-Item $fullZipPath
