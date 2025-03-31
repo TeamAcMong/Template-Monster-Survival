@@ -380,7 +380,7 @@ pipeline {
         stage('Deploy to Discord') {
                     steps {
                         script {
-                            // Script C# để upload file
+                            // Các biến môi trường
                     def buildOutput = env.BUILD_OUTPUT
                     def workspace = env.WORKSPACE
                     def gameName = env.GAME_NAME
@@ -390,6 +390,8 @@ pipeline {
                     def buildNumber = env.BUILD_NUMBER
                     def safeBranchName = gitBranch.replaceAll('[/\\\\]', '-')
                     def zipFileName = "${gameName}_${targetPlatform}_${buildType}_${safeBranchName}_${buildNumber}.zip"
+                    
+                    // Script C# để upload file
                     def uploadScript = '''
         using Discord;
         using Discord.WebSocket;
@@ -407,29 +409,50 @@ pipeline {
             {
                 _botToken = botToken;
                 _channelId = channelId;
-                _client = new DiscordSocketClient();
+                _client = new DiscordSocketClient(new DiscordSocketConfig { 
+                    LogLevel = LogSeverity.Info,
+                    DefaultRetryMode = RetryMode.AlwaysRetry
+                });
+                
+                _client.Log += LogAsync;
+            }
+        
+            private Task LogAsync(LogMessage log)
+            {
+                Console.WriteLine(log.ToString());
+                return Task.CompletedTask;
             }
         
             public async Task UploadFileAsync(string filePath, string message)
             {
-                await _client.LoginAsync(TokenType.Bot, _botToken);
-                await _client.StartAsync();
-        
-                _client.Ready += async () => 
+                try 
                 {
+                    await _client.LoginAsync(TokenType.Bot, _botToken);
+                    await _client.StartAsync();
+        
+                    await Task.Delay(5000);  // Đợi kết nối
+        
                     var channel = _client.GetChannel(_channelId) as ITextChannel;
                     if (channel != null)
                     {
                         using (var fileStream = File.OpenRead(filePath))
                         {
                             await channel.SendFileAsync(fileStream, Path.GetFileName(filePath), message);
+                            Console.WriteLine($"File uploaded successfully: {filePath}");
                         }
+                    }
+                    else 
+                    {
+                        Console.WriteLine("Channel not found.");
                     }
         
                     await _client.StopAsync();
-                };
-        
-                await Task.Delay(30000);  // Timeout 30 giây
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Upload error: {ex.Message}");
+                    throw;
+                }
             }
         }
         
@@ -451,33 +474,37 @@ pipeline {
                     // Lưu script C#
                     writeFile file: 'DiscordUploader.cs', text: uploadScript
         
-                    // Biên dịch và chạy script
-                    sh '''
-                    # Cài đặt .NET SDK
-                    wget https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
-                    sudo dpkg -i packages-microsoft-prod.deb
-                    sudo apt-get update
-                    sudo apt-get install -y apt-transport-https && sudo apt-get update && sudo apt-get install -y dotnet-sdk-6.0
+                    // Biên dịch và chạy script (phiên bản Windows)
+                    bat '''
+                    @echo off
+                    
+                    REM Kiểm tra .NET SDK
+                    where dotnet >nul 2>nul
+                    if %errorlevel% neq 0 (
+                        echo .NET SDK not installed. Please install .NET SDK.
+                        exit /b 1
+                    )
         
-                    # Tạo project .NET
+                    REM Tạo project .NET
                     dotnet new console -o DiscordUploader
                     cd DiscordUploader
                     
-                    # Cài đặt Discord.Net
+                    REM Cài đặt Discord.Net
                     dotnet add package Discord.Net
                     
-                    # Thay thế Program.cs
-                    cp ../DiscordUploader.cs Program.cs
+                    REM Thay thế Program.cs
+                    copy ..\DiscordUploader.cs Program.cs
                     
-                    # Biên dịch
-                    dotnet publish -c Release -r linux-x64 --self-contained true
+                    REM Biên dịch
+                    dotnet publish -c Release -r win-x64 --self-contained true
                     
-                    # Chạy upload
-                    DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN} \
-                    DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID} \
-                    ./bin/Release/net6.0/linux-x64/publish/DiscordUploader \
-                    "${WORKSPACE}/${zipFileName}" \
-                    "New build for ${GAME_NAME} (Build ${BUILD_NUMBER}, Platform: ${TARGET_PLATFORM})"
+                    REM Chạy upload
+                    set DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+                    set DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+                    
+                    bin\\Release\\net6.0\\win-x64\\publish\\DiscordUploader.exe ^
+                    "${workspace}\\${zipFileName}" ^
+                    "New build for ${gameName} (Build ${buildNumber}, Platform: ${targetPlatform})"
                     '''
                 }
             }
