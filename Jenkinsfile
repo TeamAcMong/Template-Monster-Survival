@@ -319,113 +319,70 @@ pipeline {
         
         stage('Zip Build') {
             steps {
-                // Tạo file zip chứa game build và thông tin build
                 script {
+                    // Xác định tên file và đường dẫn
                     def buildFileName
+                    def buildPath = "${env.BUILD_OUTPUT}"
                     
+                    // Xác định tên file build dựa trên nền tảng
                     switch(env.TARGET_PLATFORM.toLowerCase()) {
                         case 'windows':
-                            buildFileName = "${GAME_NAME}_${TARGET_PLATFORM}.exe"
+                            buildFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}.exe"
                             break
                         case 'android':
-                            if (env.ANDROID_BUILD_FORMAT.toLowerCase() == 'aab') {
-                                buildFileName = "${GAME_NAME}_${TARGET_PLATFORM}.aab"
-                            } else {
-                                buildFileName = "${GAME_NAME}_${TARGET_PLATFORM}.apk"
-                            }
+                            buildFileName = env.ANDROID_BUILD_FORMAT.toLowerCase() == 'aab' ? 
+                                "${env.GAME_NAME}_${env.TARGET_PLATFORM}.aab" : 
+                                "${env.GAME_NAME}_${env.TARGET_PLATFORM}.apk"
                             break
                         case 'ios':
                         case 'webgl':
-                            // Đây là thư mục, không phải file
-                            buildFileName = "${GAME_NAME}_${TARGET_PLATFORM}"
-                            break
-                        case 'macos':
-                            buildFileName = "${GAME_NAME}_${TARGET_PLATFORM}.app"
-                            break
-                        case 'linux':
-                            buildFileName = "${GAME_NAME}_${TARGET_PLATFORM}.x86_64"
+                            buildFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}"
                             break
                         default:
-                            buildFileName = "${GAME_NAME}_${TARGET_PLATFORM}"
-                            break
+                            buildFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}"
                     }
                     
-                    // Tạo tên file ZIP bao gồm thông tin nhánh git
-                    def branchName = env.SELECTED_GIT_BRANCH.replaceAll('/', '-') // Thay thế / bằng - để tránh lỗi đường dẫn
-                    env.ZIP_FILENAME = "${GAME_NAME}_${TARGET_PLATFORM}_${BUILD_TYPE}_${branchName}_${BUILD_VERSION}.zip"
+                    // Tạo tên ZIP
+                    def branchName = env.GIT_BRANCH.replaceAll('/', '-')
+                    def zipFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}_${env.BUILD_TYPE}_${branchName}_${env.BUILD_NUMBER}.zip"
                     
-                    // Kiểm tra xem thư mục build output có tồn tại không
-                    bat "IF NOT EXIST \"${BUILD_OUTPUT}\" MKDIR \"${BUILD_OUTPUT}\""
+                    // Sử dụng .NET Framework để nén
+                    powershell """
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem
                     
-                    // Kiểm tra xem build đã thành công hay chưa
-                    def buildFileExists = false
+                    # Đường dẫn đầy đủ của file/thư mục build
+                    \$buildPath = Join-Path "${buildPath}" "${buildFileName}"
                     
-                    if (env.TARGET_PLATFORM.toLowerCase() in ['ios', 'webgl', 'macos']) {
-                        buildFileExists = fileExists("${BUILD_OUTPUT}\\${buildFileName}")
+                    # Đường dẫn file ZIP
+                    \$zipPath = Join-Path "${env.WORKSPACE}" "${zipFileName}"
+                    
+                    # Kiểm tra file/thư mục build tồn tại
+                    if (!(Test-Path \$buildPath)) {
+                        Write-Error "Build path not found: \$buildPath"
+                        exit 1
+                    }
+                    
+                    # Nén file hoặc thư mục
+                    if (Test-Path -PathType Leaf \$buildPath) {
+                        # Nén file
+                        [System.IO.Compression.ZipFile]::CreateFromDirectory(\$buildPath, \$zipPath, [System.IO.Compression.CompressionLevel]::Optimal, \$false)
                     } else {
-                        buildFileExists = fileExists("${BUILD_OUTPUT}\\${buildFileName}")
+                        # Nén thư mục
+                        [System.IO.Compression.ZipFile]::CreateFromDirectory(\$buildPath, \$zipPath)
                     }
                     
-                    if (!buildFileExists) {
-                        error "Build file not found: ${BUILD_OUTPUT}\\${buildFileName}. Unity build may have failed."
-                    }
-                    
-                    // Tạo file ZIP
-                    if (env.TARGET_PLATFORM.toLowerCase() in ['ios', 'webgl', 'macos']) {
-                        // Build là thư mục, nén toàn bộ thư mục
-                        powershell """
-                        Add-Type -AssemblyName System.IO.Compression.FileSystem
-                        if (Test-Path "${BUILD_OUTPUT}\\${buildFileName}") {
-                            [System.IO.Compression.ZipFile]::CreateFromDirectory("${BUILD_OUTPUT}\\${buildFileName}", "${WORKSPACE}\\${ZIP_FILENAME}")
-                            Write-Output "Created ZIP from directory: ${BUILD_OUTPUT}\\${buildFileName}"
-                        } else {
-                            Write-Error "Directory not found: ${BUILD_OUTPUT}\\${buildFileName}"
-                            exit 1
-                        }
-                        """
-                    } else {
-                        // Build là file, nén file và build_info.txt
-                        powershell """
-                        Add-Type -AssemblyName System.IO.Compression.FileSystem
+                    # Kiểm tra file ZIP đã được tạo
+                    if (Test-Path \$zipPath) {
+                        Write-Output "Created ZIP file: \$zipPath"
                         
-                        # Tạo file ZIP mới
-                        try {
-                            \$zipFile = [System.IO.Compression.ZipFile]::Open("${WORKSPACE}\\${ZIP_FILENAME}", [System.IO.Compression.ZipArchiveMode]::Create)
-                            
-                            # Kiểm tra nếu file build tồn tại
-                            if (Test-Path "${BUILD_OUTPUT}\\${buildFileName}") {
-                                # Thêm file build
-                                [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(\$zipFile, "${BUILD_OUTPUT}\\${buildFileName}", "${buildFileName}")
-                                Write-Output "Added file to ZIP: ${buildFileName}"
-                            } else {
-                                Write-Error "Build file not found: ${BUILD_OUTPUT}\\${buildFileName}"
-                            }
-                            
-                            # Thêm file build_info.txt nếu tồn tại
-                            if (Test-Path "${BUILD_OUTPUT}\\build_info.txt") {
-                                [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(\$zipFile, "${BUILD_OUTPUT}\\build_info.txt", "build_info.txt")
-                                Write-Output "Added file to ZIP: build_info.txt"
-                            } else {
-                                Write-Output "build_info.txt not found, skipping"
-                            }
-                        }
-                        catch {
-                            Write-Error "Error creating ZIP file: \$_"
-                            exit 1
-                        }
-                        finally {
-                            # Đảm bảo đóng file ZIP
-                            if (\$zipFile -ne \$null) {
-                                \$zipFile.Dispose()
-                            }
-                        }
-                        """
+                        # Hiển thị thông tin file
+                        \$zipInfo = Get-Item \$zipPath
+                        Write-Output "ZIP file size: \$(\$zipInfo.Length / 1MB) MB"
+                    } else {
+                        Write-Error "Failed to create ZIP file"
+                        exit 1
                     }
-                    
-                    // Kiểm tra file ZIP đã được tạo hay chưa
-                    if (!fileExists("${WORKSPACE}\\${ZIP_FILENAME}")) {
-                        error "ZIP file was not created: ${WORKSPACE}\\${ZIP_FILENAME}"
-                    }
+                    """
                 }
             }
         }
