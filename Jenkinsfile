@@ -320,68 +320,58 @@ pipeline {
         stage('Zip Build') {
             steps {
                 script {
-                    // Xác định tên file và đường dẫn
-                    def buildFileName
-                    def buildPath = "${env.BUILD_OUTPUT}"
+                    // Debug: In ra các biến môi trường
+                    bat """
+                    echo BUILD_OUTPUT: %BUILD_OUTPUT%
+                    echo WORKSPACE: %WORKSPACE%
+                    echo GAME_NAME: %GAME_NAME%
+                    echo TARGET_PLATFORM: %TARGET_PLATFORM%
+                    echo BUILD_TYPE: %BUILD_TYPE%
+                    echo GIT_BRANCH: %GIT_BRANCH%
+                    """
+
+                    // Sử dụng batch script để nén
+                    bat """
+                    @echo off
+                    setlocal enabledelayedexpansion
+
+                    set "BUILD_PATH=%BUILD_OUTPUT%"
+                    set "WORKSPACE_PATH=%WORKSPACE%"
                     
-                    // Xác định tên file build dựa trên nền tảng
-                    switch(env.TARGET_PLATFORM.toLowerCase()) {
-                        case 'windows':
-                            buildFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}.exe"
-                            break
-                        case 'android':
-                            buildFileName = env.ANDROID_BUILD_FORMAT.toLowerCase() == 'aab' ? 
-                                "${env.GAME_NAME}_${env.TARGET_PLATFORM}.aab" : 
-                                "${env.GAME_NAME}_${env.TARGET_PLATFORM}.apk"
-                            break
-                        case 'ios':
-                        case 'webgl':
-                            buildFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}"
-                            break
-                        default:
-                            buildFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}"
-                    }
-                    
-                    // Tạo tên ZIP
-                    def branchName = env.GIT_BRANCH.replaceAll('/', '-')
-                    def zipFileName = "${env.GAME_NAME}_${env.TARGET_PLATFORM}_${env.BUILD_TYPE}_${branchName}_${env.BUILD_NUMBER}.zip"
-                    
-                    // Sử dụng .NET Framework để nén
-                    powershell """
-                    Add-Type -AssemblyName System.IO.Compression.FileSystem
-                    
-                    # Đường dẫn đầy đủ của file/thư mục build
-                    \$buildPath = Join-Path "${buildPath}" "${buildFileName}"
-                    
-                    # Đường dẫn file ZIP
-                    \$zipPath = Join-Path "${env.WORKSPACE}" "${zipFileName}"
-                    
-                    # Kiểm tra file/thư mục build tồn tại
-                    if (!(Test-Path \$buildPath)) {
-                        Write-Error "Build path not found: \$buildPath"
-                        exit 1
-                    }
-                    
-                    # Nén file hoặc thư mục
-                    if (Test-Path -PathType Leaf \$buildPath) {
-                        # Nén file
-                        [System.IO.Compression.ZipFile]::CreateFromDirectory(\$buildPath, \$zipPath, [System.IO.Compression.CompressionLevel]::Optimal, \$false)
-                    } else {
-                        # Nén thư mục
-                        [System.IO.Compression.ZipFile]::CreateFromDirectory(\$buildPath, \$zipPath)
-                    }
-                    
-                    # Kiểm tra file ZIP đã được tạo
-                    if (Test-Path \$zipPath) {
-                        Write-Output "Created ZIP file: \$zipPath"
-                        
-                        # Hiển thị thông tin file
-                        \$zipInfo = Get-Item \$zipPath
-                        Write-Output "ZIP file size: \$(\$zipInfo.Length / 1MB) MB"
-                    } else {
-                        Write-Error "Failed to create ZIP file"
-                        exit 1
-                    }
+                    REM Xác định tên file build
+                    if "%TARGET_PLATFORM%"=="Android" (
+                        if "%ANDROID_BUILD_FORMAT%"=="aab" (
+                            set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%.aab"
+                        ) else (
+                            set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%.apk"
+                        )
+                    ) else if "%TARGET_PLATFORM%"=="Windows" (
+                        set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%.exe"
+                    ) else (
+                        set "BUILD_FILE=%GAME_NAME%_%TARGET_PLATFORM%"
+                    )
+
+                    REM Tạo tên file ZIP
+                    set "BRANCH_NAME=%GIT_BRANCH:/=-%"
+                    set "ZIP_FILENAME=%GAME_NAME%_%TARGET_PLATFORM%_%BUILD_TYPE%_!BRANCH_NAME!_%BUILD_NUMBER%.zip"
+
+                    REM Kiểm tra file/thư mục build tồn tại
+                    if not exist "%BUILD_PATH%\\!BUILD_FILE!" (
+                        echo Build file not found: %BUILD_PATH%\!BUILD_FILE!
+                        exit /b 1
+                    )
+
+                    REM Nén file
+                    powershell -Command "&{Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory('%BUILD_PATH%\\!BUILD_FILE!', '%WORKSPACE%\\!ZIP_FILENAME!', [System.IO.Compression.CompressionLevel]::Optimal, $false)}"
+
+                    REM Kiểm tra file ZIP đã được tạo
+                    if not exist "%WORKSPACE%\\!ZIP_FILENAME!" (
+                        echo Failed to create ZIP file
+                        exit /b 1
+                    )
+
+                    REM Hiển thị thông tin file ZIP
+                    powershell -Command "&{$zipFile = Get-Item '%WORKSPACE%\\!ZIP_FILENAME!'; Write-Host 'Created ZIP file: !ZIP_FILENAME!'; Write-Host ('ZIP file size: ' + [math]::Round($zipFile.Length / 1MB, 2) + ' MB')}"
                     """
                 }
             }
