@@ -412,15 +412,12 @@ pipeline {
                     def gameName = env.GAME_NAME
                     def targetPlatform = env.TARGET_PLATFORM
                     def buildType = env.BUILD_TYPE
-                    def gitBranch = env.SELECTED_GIT_BRANCH ?: env.GIT_BRANCH
+                    def gitBranch = env.GIT_BRANCH
                     def buildNumber = env.BUILD_NUMBER
                     def bundleVersion = env.BUNDLE_VERSION
                     
                     // Create safe branch name for filename
                     def safeBranchName = gitBranch.replaceAll('[/\\\\]', '-')
-                    
-                    // Determine the build file name
-                    def buildFileName
                     def zipFileName = "${gameName}_${targetPlatform}_${buildType}_${safeBranchName}_${buildNumber}.zip"
                     
                     // Log the deployment start
