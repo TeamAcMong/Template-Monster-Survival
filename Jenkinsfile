@@ -120,6 +120,23 @@ pipeline {
     }
     
     stages {
+
+        stage('Setup Ngrok URL') {
+            steps {
+                script {
+                    try {
+                        def ngrokUrl = bat(script: "@curl -s http://localhost:4040/api/tunnels | findstr /C:\"public_url\" | findstr /C:\"https\"", returnStdout: true).trim()
+                        // Extract just the URL using regular expression
+                        ngrokUrl = (ngrokUrl =~ /https:\/\/[^"]+/)[0]
+                        env.NGROK_PUBLIC_URL = ngrokUrl
+                        echo "Set NGROK_PUBLIC_URL to: ${ngrokUrl}"
+                    } catch (Exception e) {
+                        error "Failed to get ngrok URL: ${e.message}"
+                    }
+                }
+            }
+        }
+        
         stage('Setup Git') {
             steps {
                 // Cấu hình Git để hỗ trợ đường dẫn dài
@@ -412,75 +429,135 @@ pipeline {
                     def gameName = env.GAME_NAME
                     def targetPlatform = env.TARGET_PLATFORM
                     def buildType = env.BUILD_TYPE
-                    def gitBranch = env.GIT_BRANCH
+                    def gitBranch = env.SELECTED_GIT_BRANCH ?: env.GIT_BRANCH
                     def buildNumber = env.BUILD_NUMBER
                     def bundleVersion = env.BUNDLE_VERSION
                     
                     // Create safe branch name for filename
                     def safeBranchName = gitBranch.replaceAll('[/\\\\]', '-')
+                    
+                    // Determine the zip file name
                     def zipFileName = "${gameName}_${targetPlatform}_${buildType}_${safeBranchName}_${buildNumber}.zip"
+                    def fullZipPath = "${workspace}\\${zipFileName}"
                     
                     // Log the deployment start
-                    echo "Starting deployment to Discord..."
-                    echo "File to deploy: ${workspace}\\${zipFileName}"
+                    echo "Starting Discord webhook notification..."
+                    echo "Build file: ${fullZipPath}"
                     
-                    // Create a project directory for Discord.NET
-                    bat """
-                    @echo off
+                    // Get file size for the message
+                    def fileSize = "Unknown"
+                    try {
+                                def fileSizeBytes = bat(script: "@for %%I in (\"${fullZipPath}\") do @echo %%~zI", returnStdout: true).trim()
+                        def fileSizeMB = (fileSizeBytes.toLong() / (1024 * 1024)).round(2)
+                        fileSize = "${fileSizeMB} MB"
+                    } catch (Exception e) {
+                                echo "Warning: Could not determine file size: ${e.message}"
+                    }
                     
-                    REM Check if .NET SDK is installed
-                    where dotnet >nul 2>nul
-                    if %errorlevel% neq 0 (
-                        echo .NET SDK not installed. Please install .NET SDK.
-                        exit /b 1
-                    )
-        
-                    REM Create .NET project
-                    mkdir DiscordUploader || echo Directory already exists
-                    cd DiscordUploader
+                    // Get ngrok public URL from environment or a config file
+                    def ngrokUrl = env.NGROK_PUBLIC_URL
+                    if (!ngrokUrl) {
+                                echo "Warning: NGROK_PUBLIC_URL environment variable not set. Using fallback method to detect ngrok URL."
+                        
+                        // Try to get ngrok URL using curl (if running on the same machine)
+                        try {
+                                    ngrokUrl = bat(script: "@curl -s http://localhost:4040/api/tunnels | findstr /C:\"public_url\" | findstr /C:\"https\"", returnStdout: true).trim()
+                            // Extract just the URL from the response using regular expression
+                            ngrokUrl = (ngrokUrl =~ /https:\/\/[^"]+/)[0]
+                        } catch (Exception e) {
+                                    echo "Could not automatically detect ngrok URL: ${e.message}"
+                            echo "Please set NGROK_PUBLIC_URL environment variable in Jenkins."
+                            error "Failed to determine ngrok public URL"
+                        }
+                    }
                     
-                    REM Initialize project if not already initialized
-                    if not exist "DiscordUploader.csproj" (
-                        dotnet new console
-                        dotnet add package Discord.Net
-                    )
+                    // Ensure ngrok URL doesn't end with a slash
+                    if (ngrokUrl.endsWith('/')) {
+                                ngrokUrl = ngrokUrl.substring(0, ngrokUrl.length() - 1)
+                    }
                     
-                    REM Copy the DiscordUploader.cs file
-                    copy ..\\DiscordUploader.cs Program.cs /Y
+                    // Create the download URL - needs to be adjusted based on your Jenkins setup
+                    // This assumes you have a file parameter plugin or some way to access the file
+                    def downloadUrl = "${ngrokUrl}/job/${env.JOB_NAME}/${env.BUILD_NUMBER}/artifact/${zipFileName}"
                     
-                    REM Build the project
-                    dotnet build -c Release
+                    // Replace spaces with %20 for URL
+                    downloadUrl = downloadUrl.replace(' ', '%20')
                     
-                    REM Set environment variables for the Discord uploader
-                    set DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-                    set DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
-                    set TARGET_PLATFORM=${targetPlatform}
-                    set BUILD_TYPE=${buildType}
-                    set BUNDLE_VERSION=${bundleVersion}
-                    set SELECTED_GIT_BRANCH=${gitBranch}
-                    set BUILD_NUMBER=${buildNumber}
-                    set GAME_NAME=${gameName}
-                    
-                    REM Run the Discord uploader
-                    dotnet run --no-build -c Release "${workspace}\\${zipFileName}" "New build for ${gameName} (Build ${buildNumber})"
-                    
-                    REM Check if upload was successful
-                    if %errorlevel% neq 0 (
-                        echo Failed to upload build to Discord
-                        exit /b 1
-                    ) else (
-                        echo Successfully uploaded build to Discord
-                    )
+                    // Create a Discord webhook payload with rich embed
+                    def payload = """
+                    {
+                        "content": "New build available for ${gameName}!",
+                        "embeds": [
+                            {
+                                "title": "${gameName} Build ${buildNumber}",
+                                "description": "A new build has been generated with the following details:",
+                                "color": 3447003,
+                                "fields": [
+                                    {
+                                        "name": "Platform",
+                                        "value": "${targetPlatform}",
+                                        "inline": true
+                                    },
+                                    {
+                                        "name": "Build Type",
+                                        "value": "${buildType}",
+                                        "inline": true
+                                    },
+                                    {
+                                        "name": "Version",
+                                        "value": "${bundleVersion ?: 'N/A'}",
+                                        "inline": true
+                                    },
+                                    {
+                                        "name": "Branch",
+                                        "value": "${gitBranch}",
+                                        "inline": true
+                                    },
+                                    {
+                                        "name": "File Size",
+                                        "value": "${fileSize}",
+                                        "inline": true
+                                    },
+                                    {
+                                        "name": "Download Link",
+                                        "value": "[Click here to download](${downloadUrl})"
+                                    }
+                                ],
+                                "footer": {
+                                    "text": "Built on ${new Date().format("yyyy-MM-dd HH:mm:ss")}"
+                                }
+                            }
+                        ]
+                    }
                     """
+                    
+                    // Save payload to a temporary file
+                    writeFile file: 'discord_payload.json', text: payload
+                    
+                    // Send the webhook using curl
+                    withCredentials([string(credentialsId: 'discord-webhook-url', variable: 'DISCORD_WEBHOOK')]) {
+                                def result = bat(script: """
+                            curl -i -H "Accept: application/json" -H "Content-Type:application/json" -X POST --data-binary @discord_payload.json %DISCORD_WEBHOOK%
+                        """, returnStatus: true)
+                        
+                        if (result != 0) {
+                                    echo "Warning: Discord webhook notification failed"
+                        } else {
+                                    echo "Successfully sent Discord notification with download link"
+                        }
+                    }
+                    
+                    // Archive the artifact in Jenkins to make it available for download
+                    archiveArtifacts artifacts: zipFileName, fingerprint: true
                 }
             }
             
             post {
                         success {
-                            echo "Successfully deployed build to Discord with direct download link"
+                            echo "Successfully provided build download link via Discord"
                 }
                 failure {
-                            echo "Failed to deploy build to Discord"
+                            echo "Failed to notify Discord about build"
                 }
             }
         }
