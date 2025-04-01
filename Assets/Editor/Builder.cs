@@ -74,6 +74,39 @@ public class Builder
         }
     }
 
+    /// <summary>
+    /// Configure build cache settings based on environment variables.
+    /// </summary>
+    private static void ConfigureBuildCache()
+    {
+        string cleanBuild = Environment.GetEnvironmentVariable("CLEAN_BUILD");
+        bool isCleanBuild = !string.IsNullOrEmpty(cleanBuild) && cleanBuild.ToLower() == "true";
+
+        // Log the cache configuration
+        Debug.Log($"Build cache configuration: Clean Build = {isCleanBuild}");
+
+        if (isCleanBuild)
+        {
+            // For clean builds, we could optionally disable the cache completely
+            // but generally it's better to just clean the Library folder
+            Debug.Log("Clean build requested - Library folder should have been deleted");
+        }
+        else
+        {
+            // For cached builds, we might want to add additional optimizations here
+            Debug.Log("Using build cache from previous builds");
+        
+            // Ensure cache is enabled
+#if UNITY_2020_1_OR_NEWER
+            // For Unity 2020.1 and newer, you can access the build cache settings API
+            // BuildCache.UseCache = true;  // Uncomment if needed and available in your Unity version
+#endif
+        }
+
+        // If using the cache, we might want to add warmup instructions here
+        // to ensure the cache is properly initialized
+    }
+    
     static void PerformBuild()
     {
         // Lấy đường dẫn build output
@@ -84,6 +117,9 @@ public class Builder
         {
             try
             {
+                // Configure build cache settings
+                ConfigureBuildCache();
+                
                 // Các bước build như cũ...
                 string targetPlatform = Environment.GetEnvironmentVariable("TARGET_PLATFORM") ?? "Windows";
                 string buildType = Environment.GetEnvironmentVariable("BUILD_TYPE") ?? "Release";

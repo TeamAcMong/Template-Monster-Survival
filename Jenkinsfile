@@ -23,6 +23,11 @@ pipeline {
             defaultValue: '1.0.0',
             description: 'Phiên bản bundle (x.y.z)'
         )
+        booleanParam(
+            name: 'CLEAN_BUILD',
+            defaultValue: false,
+            description: 'Perform a clean build (true) or use cache from previous builds (false)'
+        )
         string(
             name: 'BUNDLE_IDENTIFIER',
             defaultValue: 'com.UnderCats.TileCat',
@@ -150,10 +155,27 @@ pipeline {
         }
         
         stage('Clean Previous Build') {
-            steps {
-                // Xóa thư mục build cũ nếu tồn tại
-                bat "IF EXIST \"${BUILD_OUTPUT}\" RMDIR /S /Q \"${BUILD_OUTPUT}\""
-                bat "MKDIR \"${BUILD_OUTPUT}\""
+                    steps {
+                        script {
+                            // Always clean the build output directory
+                    bat "IF EXIST \"${BUILD_OUTPUT}\" RMDIR /S /Q \"${BUILD_OUTPUT}\""
+                    bat "MKDIR \"${BUILD_OUTPUT}\""
+                    
+                    // If CLEAN_BUILD is true, also clean the Library folder to force a clean build
+                    if (params.CLEAN_BUILD) {
+                                echo "Performing clean build - removing Library folder and build cache"
+                        bat """
+                        IF EXIST \"${WORKSPACE}\\Library\" RMDIR /S /Q \"${WORKSPACE}\\Library\"
+                        IF EXIST \"${WORKSPACE}\\Temp\" RMDIR /S /Q \"${WORKSPACE}\\Temp\"
+                        """
+                        // You might want to clean additional cache-related folders
+                        bat """
+                        IF EXIST \"${WORKSPACE}\\obj\" RMDIR /S /Q \"${WORKSPACE}\\obj\"
+                        """
+                    } else {
+                                echo "Using cached build artifacts from previous builds"
+                    }
+                }
             }
         }
         
@@ -259,60 +281,64 @@ pipeline {
         }
         
         stage('Unity Build') {
-            steps {
-                script {
-                    // Sử dụng withEnv để đảm bảo các biến môi trường được truyền đúng
+                    steps {
+                        script {
+                            // Use withEnv to ensure all variables are properly passed to the build command
                     withEnv([
                         "UNITY_PATH=${UNITY_PATH}",
                         "WORKSPACE=${WORKSPACE}",
                         "TARGET_PLATFORM=${params.TARGET_PLATFORM}",
-                        "BUILD_TYPE=${params.BUILD_TYPE}"
+                        "BUILD_TYPE=${params.BUILD_TYPE}",
+                        "CLEAN_BUILD=${params.CLEAN_BUILD}" // Pass the clean build parameter
                     ]) {
-                        // Chạy Unity build với lệnh verbose
+                                // Log build configuration
+                        bat """
+                        echo Starting Unity Build
+                        echo Unity Path: %UNITY_PATH%
+                        echo Workspace: %WORKSPACE%
+                        echo Target Platform: %TARGET_PLATFORM%
+                        echo Build Type: %BUILD_TYPE%
+                        echo Clean Build: %CLEAN_BUILD%
+                        echo Android Build Configuration:
+                        echo Target Platform: %TARGET_PLATFORM%
+                        echo Build Format: %ANDROID_BUILD_FORMAT%
+                        echo Scripting Backend: %ANDROID_SCRIPTING_BACKEND%
+                        echo Target Architecture: %ANDROID_TARGET_ARCHITECTURE%
+                        """
+        
+                        // Run Unity build command
                         def buildResult = bat(
                             script: """
-                            echo Starting Unity Build
-                            echo Unity Path: %UNITY_PATH%
-                            echo Workspace: %WORKSPACE%
-                            echo Target Platform: %TARGET_PLATFORM%
-                            echo Build Type: %BUILD_TYPE%
-                            echo Android Build Configuration:
-                            echo Target Platform: %TARGET_PLATFORM%
-                            echo Build Format: %ANDROID_BUILD_FORMAT%
-                            echo Scripting Backend: %ANDROID_SCRIPTING_BACKEND%
-                            echo Target Architecture: %ANDROID_TARGET_ARCHITECTURE%
-
                             \"${UNITY_PATH}\" -quit -batchmode -nographics -logFile - -projectPath \"${WORKSPACE}\" -executeMethod Builder.PerformBuild
                             """, 
                             returnStatus: true
                         )
-
-                        // Ghi log build vào file để debug
+        
+                        // Generate detailed log
                         bat """
                         \"${UNITY_PATH}\" -quit -batchmode -nographics -logFile \"${WORKSPACE}\\unity_verbose_build.log\" -projectPath \"${WORKSPACE}\" -executeMethod Builder.PerformBuild
                         """
-
-                        // Hiển thị log verbose
+        
+                        // Display log
                         bat "type \"${WORKSPACE}\\unity_verbose_build.log\""
-
-                        // Kiểm tra kết quả build
+        
+                        // Check build result
                         if (buildResult != 0) {
-                            error "Unity build failed. Check the logs for details."
+                                    error "Unity build failed. Check the logs for details."
                         }
                     }
                 }
             }
             
-            // Thêm post-build để luôn hiển thị log
+            // Post-build log display remains the same
             post {
-                always {
-                    script {
-                        // Đảm bảo log luôn được hiển thị
-                        if (fileExists("${WORKSPACE}\\unity_verbose_build.log")) {
-                            echo "Unity Build Log:"
+                        always {
+                            script {
+                                if (fileExists("${WORKSPACE}\\unity_verbose_build.log")) {
+                                    echo "Unity Build Log:"
                             echo readFile("${WORKSPACE}\\unity_verbose_build.log")
                         } else {
-                            echo "Unity verbose build log not found"
+                                    echo "Unity verbose build log not found"
                         }
                     }
                 }
