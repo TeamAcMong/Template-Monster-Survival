@@ -150,10 +150,10 @@ pipeline {
             steps {
                 // Xóa workspace trước khi checkout để tránh lỗi repository bị hỏng
                 cleanWs()
-                
+                def gitBranch = env.SELECTED_GIT_BRANCH ?: env.GIT_BRANCH
                 // Checkout code từ GitHub repository với cấu hình nâng cao và nhánh được chọn
                 checkout([$class: 'GitSCM',
-                    branches: [[name: "*/${def gitBranch = env.SELECTED_GIT_BRANCH ?: env.GIT_BRANCH}"]], // Sử dụng nhánh từ tham số
+                    branches: [[name: "*/${gitBranch}"]], // Sử dụng nhánh từ tham số
                     extensions: [
                         [$class: 'CloneOption', depth: 1, noTags: false, reference: '', shallow: true, timeout: 60],
                         [$class: 'CheckoutOption', timeout: 60]
