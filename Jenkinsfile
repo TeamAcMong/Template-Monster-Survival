@@ -19,10 +19,15 @@ pipeline {
             description: 'Loại build (Release/Debug/Development/Profile)'
         )
         string(
+            name: 'GAME_NAME',
+            defaultValue: 'Monster Survival',
+            description: 'Tên game'
+        )
+        string(
             name: 'BUNDLE_VERSION',
             defaultValue: '1.0.0',
             description: 'Phiên bản bundle (x.y.z)'
-        )
+        )        
         booleanParam(
             name: 'CLEAN_BUILD',
             defaultValue: false,
@@ -90,7 +95,6 @@ pipeline {
         DISCORD_BOT_TOKEN = credentials('discord-bot-token')
         
         // Tên game và thông tin build
-        GAME_NAME = "TileCat"
         BUILD_VERSION = "${BUILD_NUMBER}"
         
         // Nhánh Git (lấy từ tham số)
