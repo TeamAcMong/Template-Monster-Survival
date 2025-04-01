@@ -153,7 +153,7 @@ pipeline {
                 
                 // Checkout code từ GitHub repository với cấu hình nâng cao và nhánh được chọn
                 checkout([$class: 'GitSCM',
-                    branches: [[name: "*/${params.GIT_BRANCH}"]], // Sử dụng nhánh từ tham số
+                    branches: [[name: "*/${def gitBranch = env.SELECTED_GIT_BRANCH ?: env.GIT_BRANCH}"]], // Sử dụng nhánh từ tham số
                     extensions: [
                         [$class: 'CloneOption', depth: 1, noTags: false, reference: '', shallow: true, timeout: 60],
                         [$class: 'CheckoutOption', timeout: 60]
@@ -371,7 +371,7 @@ pipeline {
                     def gameName = env.GAME_NAME
                     def targetPlatform = env.TARGET_PLATFORM
                     def buildType = env.BUILD_TYPE
-                    def gitBranch = env.GIT_BRANCH
+                    def gitBranch = env.SELECTED_GIT_BRANCH ?: env.GIT_BRANCH
                     def buildNumber = env.BUILD_NUMBER
         
                     // Xác định tên file build
