@@ -380,137 +380,84 @@ pipeline {
         stage('Deploy to Discord') {
                     steps {
                         script {
-                            // Các biến môi trường
+                            // Environment variables
                     def buildOutput = env.BUILD_OUTPUT
                     def workspace = env.WORKSPACE
                     def gameName = env.GAME_NAME
                     def targetPlatform = env.TARGET_PLATFORM
                     def buildType = env.BUILD_TYPE
-                    def gitBranch = env.GIT_BRANCH
+                    def gitBranch = env.SELECTED_GIT_BRANCH ?: env.GIT_BRANCH
                     def buildNumber = env.BUILD_NUMBER
+                    def bundleVersion = env.BUNDLE_VERSION
+                    
+                    // Create safe branch name for filename
                     def safeBranchName = gitBranch.replaceAll('[/\\\\]', '-')
+                    
+                    // Determine the build file name
+                    def buildFileName
                     def zipFileName = "${gameName}_${targetPlatform}_${buildType}_${safeBranchName}_${buildNumber}.zip"
                     
-                    // Script C# để upload file
-                    def uploadScript = '''
-        using Discord;
-        using Discord.WebSocket;
-        using System;
-        using System.IO;
-        using System.Threading.Tasks;
-        
-        public class DiscordUploader 
-        {
-            private DiscordSocketClient _client;
-            private string _botToken;
-            private ulong _channelId;
-        
-            public DiscordUploader(string botToken, ulong channelId)
-            {
-                _botToken = botToken;
-                _channelId = channelId;
-                _client = new DiscordSocketClient(new DiscordSocketConfig { 
-                    LogLevel = LogSeverity.Info,
-                    DefaultRetryMode = RetryMode.AlwaysRetry
-                });
-                
-                _client.Log += LogAsync;
-            }
-        
-            private Task LogAsync(LogMessage log)
-            {
-                Console.WriteLine(log.ToString());
-                return Task.CompletedTask;
-            }
-        
-            public async Task UploadFileAsync(string filePath, string message)
-            {
-                try 
-                {
-                    await _client.LoginAsync(TokenType.Bot, _botToken);
-                    await _client.StartAsync();
-        
-                    await Task.Delay(5000);  // Đợi kết nối
-        
-                    var channel = await _client.GetChannelAsync(_channelId) as ITextChannel;
-                    if (channel != null)
-                    {
-                        using (var fileStream = File.OpenRead(filePath))
-                        {
-                            await channel.SendFileAsync(fileStream, Path.GetFileName(filePath), message);
-                            Console.WriteLine($"File uploaded successfully: {filePath}");
-                        }
-                    }
-                    else 
-                    {
-                        Console.WriteLine("Channel not found.");
-                    }
-        
-                    await _client.StopAsync();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Upload error: {ex.Message}");
-                    throw;
-                }
-            }
-        
-            public static async Task RunUpload(string botToken, ulong channelId, string filePath, string message)
-            {
-                var uploader = new DiscordUploader(botToken, channelId);
-                await uploader.UploadFileAsync(filePath, message);
-            }
-        }
-        
-        public class Program 
-        {
-            public static async Task Main(string[] args)
-            {
-                string botToken = Environment.GetEnvironmentVariable("DISCORD_BOT_TOKEN");
-                ulong channelId = ulong.Parse(Environment.GetEnvironmentVariable("DISCORD_CHANNEL_ID"));
-                string filePath = args[0];
-                string message = args[1];
-        
-                await DiscordUploader.RunUpload(botToken, channelId, filePath, message);
-            }
-        }
-        '''
+                    // Log the deployment start
+                    echo "Starting deployment to Discord..."
+                    echo "File to deploy: ${workspace}\\${zipFileName}"
                     
-                    // Lưu script C#
-                    writeFile file: 'DiscordUploader.cs', text: uploadScript
-        
-                    // Biên dịch và chạy script (phiên bản Windows)
-                    bat '''
+                    // Create a project directory for Discord.NET
+                    bat """
                     @echo off
                     
-                    REM Kiểm tra .NET SDK
+                    REM Check if .NET SDK is installed
                     where dotnet >nul 2>nul
                     if %errorlevel% neq 0 (
                         echo .NET SDK not installed. Please install .NET SDK.
                         exit /b 1
                     )
         
-                    REM Tạo project .NET
-                    dotnet new console -o DiscordUploader
+                    REM Create .NET project
+                    mkdir DiscordUploader || echo Directory already exists
                     cd DiscordUploader
                     
-                    REM Cài đặt Discord.Net
-                    dotnet add package Discord.Net
+                    REM Initialize project if not already initialized
+                    if not exist "DiscordUploader.csproj" (
+                        dotnet new console
+                        dotnet add package Discord.Net
+                    )
                     
-                    REM Thay thế Program.cs
-                    copy ..\DiscordUploader.cs Program.cs
+                    REM Copy the DiscordUploader.cs file
+                    copy ..\\DiscordUploader.cs Program.cs /Y
                     
-                    REM Biên dịch
-                    dotnet publish -c Release -r win-x64 --self-contained true
+                    REM Build the project
+                    dotnet build -c Release
                     
-                    REM Chạy upload
+                    REM Set environment variables for the Discord uploader
                     set DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
                     set DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+                    set TARGET_PLATFORM=${targetPlatform}
+                    set BUILD_TYPE=${buildType}
+                    set BUNDLE_VERSION=${bundleVersion}
+                    set SELECTED_GIT_BRANCH=${gitBranch}
+                    set BUILD_NUMBER=${buildNumber}
+                    set GAME_NAME=${gameName}
                     
-                    bin\\Release\\net6.0\\win-x64\\publish\\DiscordUploader.exe ^
-                    "${workspace}\\${zipFileName}" ^
-                    "New build for ${gameName} (Build ${buildNumber}, Platform: ${targetPlatform})"
-                    '''
+                    REM Run the Discord uploader
+                    dotnet run --no-build -c Release "${workspace}\\${zipFileName}" "New build for ${gameName} (Build ${buildNumber})"
+                    
+                    REM Check if upload was successful
+                    if %errorlevel% neq 0 (
+                        echo Failed to upload build to Discord
+                        exit /b 1
+                    ) else (
+                        echo Successfully uploaded build to Discord
+                    )
+                    """
+                }
+            }
+            
+            post {
+                        success {
+                            echo "Successfully deployed build to Discord with direct download link"
+                }
+                failure {
+                            echo "Failed to deploy build to Discord"
                 }
             }
         }
